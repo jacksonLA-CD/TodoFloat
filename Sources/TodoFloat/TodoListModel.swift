@@ -44,6 +44,18 @@ final class TodoListModel: ObservableObject {
         case kVK_Delete where flags == .command && hasSelection:
             deleteSelected()
             return true
+        case kVK_ANSI_1 where flags.isEmpty && hasSelection:
+            setSelectedPriority(.high)
+            return true
+        case kVK_ANSI_2 where flags.isEmpty && hasSelection:
+            setSelectedPriority(.medium)
+            return true
+        case kVK_ANSI_3 where flags.isEmpty && hasSelection:
+            setSelectedPriority(.low)
+            return true
+        case kVK_ANSI_0 where flags.isEmpty && hasSelection:
+            setSelectedPriority(.normal)
+            return true
         default:
             return false
         }
@@ -71,7 +83,7 @@ final class TodoListModel: ObservableObject {
     }
 
     func commitEdit(_ todo: Todo, text: String) {
-        store.updateText(todo, to: text)
+        store.update(todo, from: text)
         editingID = nil
     }
 
@@ -99,6 +111,12 @@ final class TodoListModel: ObservableObject {
         guard let index = items.firstIndex(where: { $0.id == selectedID }) else { return }
         store.delete(items[index])
         selectItem(at: index)
+    }
+
+    /// 改优先级后这一条会换位置，选中状态跟着它走。
+    private func setSelectedPriority(_ priority: Priority) {
+        guard let todo = store.todos.first(where: { $0.id == selectedID }) else { return }
+        store.setPriority(todo, to: priority)
     }
 
     private func selectItem(at index: Int) {

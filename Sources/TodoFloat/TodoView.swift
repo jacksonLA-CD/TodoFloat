@@ -9,18 +9,21 @@ struct TodoView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Image(systemName: "plus.circle.fill")
-                    .font(.system(size: 20))
-                    .foregroundStyle(.secondary)
-                TextField("添加待办，按回车保存", text: $input)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 20))
-                    .focused($inputFocused)
-                    .onSubmit {
-                        store.add(input)
-                        input = ""
-                    }
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 10) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(.secondary)
+                    TextField("添加待办，例如：交周报 @周五 !!", text: $input)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 20))
+                        .focused($inputFocused)
+                        .onSubmit {
+                            store.add(input)
+                            input = ""
+                        }
+                }
+                inputPreview
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 16)
@@ -47,7 +50,9 @@ struct TodoView: View {
                                     onToggle: { store.toggle(todo) },
                                     onDelete: { store.delete(todo) },
                                     onBeginEdit: { model.beginEditing(todo) },
-                                    onCommitEdit: { model.commitEdit(todo, text: $0) }
+                                    onCommitEdit: { model.commitEdit(todo, text: $0) },
+                                    onSetPriority: { store.setPriority(todo, to: $0) },
+                                    onSetDue: { store.setDue(todo, to: $0) }
                                 )
                             }
                         }
@@ -55,6 +60,11 @@ struct TodoView: View {
                     }
                     .onChange(of: model.selectedID) { id in
                         guard let id else { return }
+                        proxy.scrollTo(id)
+                    }
+                    // 改优先级等操作会让选中的这一条换位置
+                    .onChange(of: store.todos) { _ in
+                        guard let id = model.selectedID else { return }
                         proxy.scrollTo(id)
                     }
                 }
@@ -73,6 +83,7 @@ struct TodoView: View {
                 }
                 Spacer()
                 Text(hint)
+                    .lineLimit(1)
             }
             .font(.system(size: 12))
             .foregroundStyle(.secondary)
@@ -107,9 +118,29 @@ struct TodoView: View {
         if model.isEditing {
             return "回车保存 · Esc 取消"
         } else if model.selectedID != nil {
-            return "空格 完成 · 回车 编辑 · ⌘⌫ 删除"
+            return "空格 完成 · 回车 编辑 · 1/2/3 优先级 · ⌘⌫ 删除"
         } else {
             return "回车添加 · ↓ 选择 · Esc 关闭"
+        }
+    }
+
+    /// 输入里识别到 @日期 或 ! 时，在输入框下面显示出来，确认解析对了。
+    @ViewBuilder
+    private var inputPreview: some View {
+        let entry = QuickEntry.parse(input)
+        if entry.due != nil || entry.priority != nil {
+            HStack(spacing: 12) {
+                if let due = entry.due {
+                    Label("截止：" + QuickEntry.dueLabel(due), systemImage: due.hasTime ? "clock" : "calendar")
+                }
+                if let priority = entry.priority {
+                    Label("优先级：" + priority.label, systemImage: "flag.fill")
+                        .foregroundStyle(priority.color)
+                }
+            }
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            .padding(.leading, 30)
         }
     }
 
@@ -135,6 +166,8 @@ struct TodoRow: View {
     let onDelete: () -> Void
     let onBeginEdit: () -> Void
     let onCommitEdit: (String) -> Void
+    let onSetPriority: (Priority) -> Void
+    let onSetDue: (Due?) -> Void
     @State private var hovering = false
     @State private var draft = ""
     @FocusState private var editorFocused: Bool
@@ -155,10 +188,17 @@ struct TodoRow: View {
                     .focused($editorFocused)
                     .onSubmit { onCommitEdit(draft) }
                     .onAppear {
-                        draft = todo.text
+                        draft = QuickEntry.editableText(for: todo)
                         DispatchQueue.main.async { editorFocused = true }
                     }
             } else {
+                if todo.priority != .normal {
+                    Image(systemName: "flag.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(todo.priority.color)
+                        .opacity(todo.done ? 0.4 : 1)
+                        .help("优先级：" + todo.priority.label)
+                }
                 Text(todo.text)
                     .font(.system(size: 15))
                     .strikethrough(todo.done)
@@ -167,6 +207,9 @@ struct TodoRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                     .onTapGesture(count: 2, perform: onBeginEdit)
+                if let due = todo.due {
+                    dueLabel(due)
+                }
             }
 
             Button(action: onDelete) {
@@ -186,8 +229,36 @@ struct TodoRow: View {
         .contextMenu {
             Button(todo.done ? "标记为未完成" : "标记为完成", action: onToggle)
             Button("编辑", action: onBeginEdit)
+            Menu("优先级") {
+                ForEach(Priority.allCases.reversed(), id: \.self) { priority in
+                    Button(priority.label) { onSetPriority(priority) }
+                }
+            }
+            Menu("截止日期") {
+                Button("今天") { onSetDue(QuickEntry.dateOnlyDue("今天")) }
+                Button("明天") { onSetDue(QuickEntry.dateOnlyDue("明天")) }
+                Button("下周一") { onSetDue(QuickEntry.dateOnlyDue("下周一")) }
+                Divider()
+                Text("要精确到时间，请按回车编辑，例如 @明天 15:00")
+                if todo.due != nil {
+                    Divider()
+                    Button("清除截止日期") { onSetDue(nil) }
+                }
+            }
+            Divider()
             Button("删除", action: onDelete)
         }
+    }
+
+    /// 已过期红色（带时间的过了那个时刻就算），今天到期橙色，其他灰色；已完成的都是灰色。
+    private func dueLabel(_ due: Due) -> some View {
+        let overdue = due.isOverdue()
+        let today = QuickEntry.daysFromToday(to: due.date) == 0
+        let color: Color = todo.done ? .secondary : overdue ? .red : today ? .orange : .secondary
+        return Label(QuickEntry.dueLabel(due), systemImage: due.hasTime ? "clock" : "calendar")
+            .font(.system(size: 12))
+            .foregroundStyle(color)
+            .help(overdue && !todo.done ? "已过期" : "截止时间")
     }
 
     private var rowBackground: Color {
@@ -197,6 +268,17 @@ struct TodoRow: View {
             return Color.primary.opacity(0.06)
         } else {
             return Color.clear
+        }
+    }
+}
+
+extension Priority {
+    var color: Color {
+        switch self {
+        case .normal: return .secondary
+        case .low: return .blue
+        case .medium: return .orange
+        case .high: return .red
         }
     }
 }
