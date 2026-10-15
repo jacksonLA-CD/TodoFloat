@@ -30,6 +30,10 @@ final class TodoStore: ObservableObject {
         todos.filter { !$0.done }.count
     }
 
+    var doneCount: Int {
+        todos.count - remainingCount
+    }
+
     func add(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -44,8 +48,21 @@ final class TodoStore: ObservableObject {
         save()
     }
 
+    /// 改成空白时保留原来的内容。
+    func updateText(_ todo: Todo, to text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let index = todos.firstIndex(where: { $0.id == todo.id }) else { return }
+        todos[index].text = trimmed
+        save()
+    }
+
     func delete(_ todo: Todo) {
         todos.removeAll { $0.id == todo.id }
+        save()
+    }
+
+    func clearCompleted() {
+        todos.removeAll { $0.done }
         save()
     }
 

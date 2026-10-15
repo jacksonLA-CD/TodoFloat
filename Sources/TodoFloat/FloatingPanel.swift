@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import SwiftUI
 
 /// 无边框、置顶、可以接收键盘输入的悬浮面板。
@@ -7,19 +8,15 @@ final class FloatingPanel: NSPanel {
     override var canBecomeMain: Bool { true }
 }
 
-/// 每次面板弹出时递增，让输入框重新获得焦点。
-final class PanelState: ObservableObject {
-    @Published var showCount = 0
-}
-
 final class FloatingPanelController: NSObject, NSWindowDelegate {
     static let size = NSSize(width: 560, height: 420)
 
     private let panel: FloatingPanel
-    private let state = PanelState()
-    private var escMonitor: Any?
+    private let model: TodoListModel
+    private var keyMonitor: Any?
 
     init(store: TodoStore) {
+        model = TodoListModel(store: store)
         panel = FloatingPanel(
             contentRect: NSRect(origin: .zero, size: Self.size),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -45,17 +42,15 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         background.maskImage = Self.roundedMask(radius: 14)
         background.autoresizingMask = [.width, .height]
 
-        let hosting = NSHostingView(rootView: TodoView(store: store, panelState: state))
+        let hosting = NSHostingView(rootView: TodoView(store: store, model: model))
         hosting.frame = background.bounds
         hosting.autoresizingMask = [.width, .height]
         background.addSubview(hosting)
         panel.contentView = background
 
-        // Esc 关闭面板
-        escMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, event.keyCode == 53, self.panel.isKeyWindow else { return event }
-            self.hide()
-            return nil
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            return self.handleKeyDown(event)
         }
     }
 
@@ -75,7 +70,7 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         }
         panel.makeKeyAndOrderFront(nil)
         panel.invalidateShadow()
-        state.showCount += 1
+        model.resetForShow()
     }
 
     func hide() {
@@ -83,6 +78,24 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         panel.orderOut(nil)
         // 把焦点还给之前的应用
         NSApp.hide(nil)
+    }
+
+    /// 返回 nil 表示事件已处理。
+    private func handleKeyDown(_ event: NSEvent) -> NSEvent? {
+        guard panel.isKeyWindow else { return event }
+        // 输入法正在拼写（比如拼音候选框打开）时，按键全部交给输入法
+        if let textView = panel.firstResponder as? NSTextView, textView.hasMarkedText() {
+            return event
+        }
+        if Int(event.keyCode) == kVK_Escape {
+            if model.isEditing {
+                model.cancelEditing()
+            } else {
+                hide()
+            }
+            return nil
+        }
+        return model.handleKeyDown(event) ? nil : event
     }
 
     func windowDidResignKey(_ notification: Notification) {
